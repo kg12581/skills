@@ -1,25 +1,25 @@
-# Extraction Patterns Reference
+# 提取模式参考
 
-Load this file when extraction results are missing CRUD operations, when interface tracing fails, or when adding support for a new pattern.
+当提取结果缺失 CRUD 操作、接口追踪失败，或需要新增提取模式时，先读本文件。
 
-## Contents
+## 目录
 
-1. [Interface tracing](#interface-tracing)
-2. [MyBatis XML mappers](#mybatis-xml-mappers)
-3. [MyBatis annotation mappers](#mybatis-annotation-mappers)
-4. [Spring Data JPA repositories](#spring-data-jpa-repositories)
+1. [接口追踪](#接口追踪)
+2. [MyBatis XML 映射器](#mybatis-xml-映射器)
+3. [MyBatis 注解映射器](#mybatis-注解映射器)
+4. [Spring Data JPA 仓库](#spring-data-jpa-仓库)
 5. [Spring JDBC](#spring-jdbc)
-6. [Table and parameter heuristics](#table-and-parameter-heuristics)
-7. [Edge cases](#edge-cases)
-8. [Adding a new source](#adding-a-new-source)
+6. [表名与参数推断规则](#表名与参数推断规则)
+7. [边界情况](#边界情况)
+8. [新增提取模式](#新增提取模式)
 
-## Interface tracing
+## 接口追踪
 
-Input: an interface list in YAML (preferred) or JSON. Each item can be traced automatically (`Controller → Service → Mapper/Repository → SQL`) or pinned with explicit hints.
+输入为 YAML（推荐）或 JSON 接口清单。每个条目可以自动追踪（`Controller → Service → Mapper/Repository → SQL`），也可以通过显式提示字段直接定位。
 
-### YAML interface lists
+### YAML 接口清单
 
-Each item is a mapping; fewer fields means more searching:
+每个条目是一个映射，字段越少，自动搜索越多：
 
 ```yaml
 interfaces:
@@ -37,35 +37,35 @@ interfaces:
   - method_name: deleteUser
 ```
 
-- A lone `controller_method` / `method_name` (no class) is searched across all parsed classes; Controller hits rank first, then Service, then Mapper/Repository.
-- HTTP verb + path (`POST /api/users`) is resolved against Spring MVC annotations (`@GetMapping`/`@PostMapping`/… with optional path, `@RequestMapping(method = …)`), combined with the class-level `@RequestMapping` base path.
-- `--auto` builds that interface list for you from every discovered endpoint, so you can provide no interface info at all.
+- 单独的 `controller_method` / `method_name`（不带类名）会在所有解析到的类中搜索方法；Controller 命中优先，其次 Service，再其次 Mapper/Repository。
+- HTTP 方法 + 路径（`POST /api/users`）会匹配 Spring MVC 注解（`@GetMapping`/`@PostMapping`/…，可带路径，也支持 `@RequestMapping(method = …)`），并结合类级 `@RequestMapping` 基础路径。
+- `--auto` 会根据发现的全部端点自动生成这份接口清单，因此可以完全不提供接口信息。
 
-Resolution rules:
+### 解析规则
 
-- Entry point: `controller + controller_method`, else `service + service_method`, else `mapper`/`repository` directly.
-- Per Java file, the tool builds a light symbol table: class name, field types (`private final UserService userService;`), constructor/method parameter types, and method bodies.
-- A call `var.method(...)` is followed when `var` resolves to a known type and the type name ends with `Controller`, `Service`, `Mapper`, `Repository`, `Dao`, `Manager`, or `Jdbc`. `this.method(...)` calls are followed within the same class.
-- A CRUD operation matches when `op.owner == type` and `op.method == called method`:
-  - MyBatis XML: owner = last segment of the mapper `namespace`.
-  - MyBatis annotation/provider: owner = file stem (e.g. `UserMapper.java` → `UserMapper`).
-  - JPA repository: owner = repository interface name.
-  - Spring JDBC: owner = file stem of the class, method = enclosing method of the `jdbcTemplate` call.
-- Trace depth defaults to 4; raise with `--depth` when chains are longer.
+- 入口优先级：`controller + controller_method`，其次 `service + service_method`，再其次直接指定 `mapper`/`repository`。
+- 对每个 Java 文件建立轻量符号表：类名、字段类型（`private final UserService userService;`）、构造方法/方法参数类型、方法体。
+- 当 `var.method(...)` 中 `var` 能解析为已知类型，且类型名以 `Controller`、`Service`、`Mapper`、`Repository`、`Dao`、`Manager` 或 `Jdbc` 结尾时，会继续追踪该调用；`this.method(...)` 在本类内继续追踪。
+- CRUD 操作匹配条件：`op.owner == 类型名` 且 `op.method == 被调用方法名`：
+  - MyBatis XML：owner = mapper `namespace` 的最后一段。
+  - MyBatis 注解/Provider：owner = 文件名去掉扩展名（如 `UserMapper.java` → `UserMapper`）。
+  - JPA 仓库：owner = 仓库接口名。
+  - Spring JDBC：owner = 所在类文件名去扩展名，method = `jdbcTemplate` 调用所在的方法。
+- 追踪深度默认 4；链路较长时用 `--depth` 提高。
 
-Troubleshooting:
+### 排查方法
 
-- `class not found: X`: the class file may be absent or the simple name collides between packages; use a fully qualified name or check the class name spelling.
-- `method has no body or is not found: X.m`: the method name is wrong, or it is a repository/interface method that only matches CRUD ops directly (check `owner`/`method` spelling in the record).
-- `no CRUD operation matched: X.m`: the method exists but no mapper/repository/JdbcTemplate SQL was found behind it, or the SQL is built dynamically.
-- `no endpoint matched: POST /api/xxx`: the Spring MVC annotations don't resolve to that path/method; check the controller mappings or switch to `Class.method` form.
-- Add `mapper` + `mapper_methods` or `repository` + `repository_methods` hints when the call chain cannot be resolved statically.
+- `未找到类：X`：类文件可能不存在，或不同包下有同名简单类；改用全限定名，或检查类名拼写。
+- `方法不存在或无方法体：X.m`：方法名不对，或者它是只匹配 CRUD 操作的仓库/接口方法（检查记录里的 `owner`/`method` 拼写）。
+- `未匹配到 CRUD 操作：X.m`：方法存在，但背后没有 mapper/repository/JdbcTemplate SQL，或 SQL 是动态拼接的。
+- `没有匹配到端点：POST /api/xxx`：Spring MVC 注解解析不到该路径/方法；检查 Controller 映射，或改用 `类.方法` 写法。
+- 静态解析不出调用链时，补充 `mapper` + `mapper_methods` 或 `repository` + `repository_methods` 提示字段。
 
-## MyBatis XML mappers
+## MyBatis XML 映射器
 
-Files matched: `*Mapper.xml` anywhere under the project root.
+匹配文件：项目根目录下所有 `*Mapper.xml`。
 
-Example:
+示例：
 
 ```xml
 <mapper namespace="com.example.mapper.UserMapper">
@@ -78,13 +78,13 @@ Example:
 </mapper>
 ```
 
-Captured: `source=mybatis-xml`, `owner` (namespace last segment), `namespace`, `method=id`, `operation` from the tag, `entity` from `resultType` (simple name), tables and params from the SQL text. Dynamic tags (`<if>`, `<where>`, `<foreach>`) are flattened: their text is included, their attributes are ignored.
+捕获内容：`source=mybatis-xml`、`owner`（namespace 最后一段）、`namespace`、`method=id`、按标签得出的 `operation`、`resultType` 的简单类名作为 `entity`，以及从 SQL 文本提取的表名和参数。动态标签（`<if>`、`<where>`、`<foreach>`）会被展开：只保留其文本，忽略其属性。
 
-## MyBatis annotation mappers
+## MyBatis 注解映射器
 
-Files matched: any `.java` containing `@Select/@Insert/@Update/@Delete` or the `@*Provider` variants.
+匹配文件：任何包含 `@Select/@Insert/@Update/@Delete` 或 `@*Provider` 变体的 `.java` 文件。
 
-Example (string-concatenated SQL is supported):
+示例（支持字符串拼接 SQL）：
 
 ```java
 @Mapper
@@ -98,13 +98,13 @@ public interface UserMapper {
 }
 ```
 
-Captured: `source=mybatis-annotation` with flattened SQL, or `source=mybatis-provider` with `sql=null` (SQL is built dynamically in the provider class). `operation` comes from the annotation name.
+捕获内容：`source=mybatis-annotation` 并带展开后的 SQL，或 `source=mybatis-provider` 且 `sql=null`（SQL 在 Provider 类中动态构建）。`operation` 来自注解名。
 
-## Spring Data JPA repositories
+## Spring Data JPA 仓库
 
-Files matched: interfaces/classes extending `CrudRepository`, `JpaRepository`, or `PagingAndSortingRepository`.
+匹配文件：继承 `CrudRepository`、`JpaRepository` 或 `PagingAndSortingRepository` 的接口/类。
 
-Example:
+示例：
 
 ```java
 @Repository
@@ -119,22 +119,22 @@ public interface UserRepository extends JpaRepository<User, Long> {
 }
 ```
 
-Derived query names are classified by prefix:
+派生查询方法名按前缀分类：
 
-| Prefix | Operation |
+| 前缀 | 操作 |
 | --- | --- |
-| `find`, `get`, `read`, `query`, `search`, `count`, `exists`, `select`, `list`, `all` | SELECT |
-| `save`, `insert`, `persist`, `create`, `add`, `store` | INSERT |
-| `update`, `modify`, `touch` | UPDATE |
-| `delete`, `remove`, `purge` | DELETE |
+| `find`、`get`、`read`、`query`、`search`、`count`、`exists`、`select`、`list`、`all` | SELECT |
+| `save`、`insert`、`persist`、`create`、`add`、`store` | INSERT |
+| `update`、`modify`、`touch` | UPDATE |
+| `delete`、`remove`、`purge` | DELETE |
 
-`@Query` SQL is captured as-is; the operation comes from the SQL's first keyword (so `@Modifying` + `update …` yields UPDATE). Derived queries have `sql=null` and `params` extracted from the method signature. JPQL entity names (`update User u …`) are mapped back to the physical table via `@Table(name=…)` on the entity.
+`@Query` SQL 原样捕获，操作类型取 SQL 第一个关键字（所以 `@Modifying` + `update …` 得到 UPDATE）。派生查询 `sql=null`，`params` 从方法签名提取。JPQL 实体名（`update User u …`）会通过实体上的 `@Table(name=…)` 映射回物理表名。
 
 ## Spring JDBC
 
-Files matched: any `.java` calling `JdbcTemplate` / `NamedParameterJdbcTemplate` methods (`query`, `queryForList`, `queryForObject`, `queryForMap`, `queryForRowSet`, `queryForStream`, `update`, `batchUpdate`, `execute`) with an inline SQL string. The variable name must contain `jdbc` (covers `jdbcTemplate`, `namedJdbcTemplate`, `jdbc`, …).
+匹配文件：任何调用 `JdbcTemplate` / `NamedParameterJdbcTemplate` 方法（`query`、`queryForList`、`queryForObject`、`queryForMap`、`queryForRowSet`、`queryForStream`、`update`、`batchUpdate`、`execute`）且 SQL 为内联字符串的 `.java` 文件。变量名必须包含 `jdbc`（覆盖 `jdbcTemplate`、`namedJdbcTemplate`、`jdbc` 等）。
 
-Example:
+示例：
 
 ```java
 public int updatePassword(Long id, String password) {
@@ -146,25 +146,25 @@ public int updatePassword(Long id, String password) {
 }
 ```
 
-Captured: `source=spring-jdbc`, `method` = enclosing Java method (best-effort), SQL text, tables, and params (`:name` and `?1..n`). Calls that pass SQL via a variable (e.g. `String sql = "…"; jdbcTemplate.query(sql, …)`) are not captured.
+捕获内容：`source=spring-jdbc`、所在方法名（尽力而为）、SQL 文本、表名和参数（`:name` 与 `?1..n`）。SQL 通过变量传入的调用（如 `String sql = "…"; jdbcTemplate.query(sql, …)`）无法捕获。
 
-## Table and parameter heuristics
+## 表名与参数推断规则
 
-- Tables come from the first keyword of the SQL: `INSERT [INTO] t`, `UPDATE t SET`, `DELETE FROM t`, `SELECT … FROM t`; `JOIN t` clauses are appended.
-- JPA tables resolve from `@Table(name = "…")` on the entity class, falling back to snake_case of the entity simple name (`UserInfo` → `user_info`).
-- Params: MyBatis `#{name}` / `${name}`, JDBC named `:name` and positional `?` markers (reported as `?1`, `?2`, …).
+- 表名取自 SQL 第一个关键字：`INSERT [INTO] t`、`UPDATE t SET`、`DELETE FROM t`、`SELECT … FROM t`；`JOIN t` 子句会追加进去。
+- JPA 表名通过实体类上的 `@Table(name = "…")` 解析，缺省回退为实体简单名转下划线（`UserInfo` → `user_info`）。
+- 参数：MyBatis `#{name}` / `${name}`、JDBC 命名参数 `:name` 和位置参数 `?`（报告为 `?1`、`?2` …）。
 
-## Edge cases
+## 边界情况
 
-- Provider-based dynamic SQL (`@*Provider`, XML `<script>`): `sql=null`; locate the provider method manually when SQL text is needed.
-- Dynamically built SQL (string concatenation in Java code, `StringBuilder`): not captured.
-- Multi-statement blocks (e.g. a `<select>` emitting several statements): only the first operation/table is classified.
-- Same simple class name in different packages: the last parsed file wins for tracing; use fully qualified names or `mapper`/`repository` hints.
-- Duplicate records (same source/file/owner/method/SQL) are de-duplicated.
+- Provider 动态 SQL（`@*Provider`、XML `<script>`）：`sql=null`，需要 SQL 文本时手动到 Provider 方法中查找。
+- 动态拼接 SQL（Java 代码字符串拼接、`StringBuilder`）：无法捕获。
+- 多语句块（如一个 `<select>` 输出多条语句）：只分类第一个操作/表。
+- 不同包下同名简单类：追踪时以最后解析到的文件为准；可使用全限定名或 `mapper`/`repository` 提示字段。
+- 重复记录（source/file/owner/method/SQL 相同）会自动去重。
 
-## Adding a new source
+## 新增提取模式
 
-1. Add a scanner function in `scripts/extract.py` returning records with the same keys as the existing extractors (`source`, `file`, `owner`, `namespace`, `method`, `operation`, `entity`, `table`, `tables`, `params`, `sql`).
-2. Register it in `analyze` (XML-based sources go in the first loop, Java-text sources in the second loop).
-3. Document the pattern here with one input/output example.
-4. Add the `source` value to the SKILL.md supported-sources list; summary counts are computed generically.
+1. 在 `scripts/extract.py` 中新增扫描函数，返回与现有提取器相同的字段（`source`、`file`、`owner`、`namespace`、`method`、`operation`、`entity`、`table`、`tables`、`params`、`sql`）。
+2. 在 `analyze` 中注册（基于 XML 的源放在第一个循环，基于 Java 文本的源放在第二个循环）。
+3. 在本文件补充一个输入/输出示例。
+4. 在 SKILL.md 的支持来源列表中补充该 `source` 值；统计计数是通用计算，无需额外处理。

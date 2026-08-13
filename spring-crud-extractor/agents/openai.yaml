@@ -1,4 +1,4 @@
 interface:
-  display_name: "Spring SQL CRUD Extractor"
+  display_name: "Spring SQL CRUD 提取器"
   short_description: "给定代码仓和 YAML 接口清单，离线提取 Java Spring 的 SQL CRUD 操作并生成 YAML 报告"
-  default_prompt: "Use $spring-crud-extractor to analyze this Java Spring repository with the attached YAML interface list and generate a YAML report of the SQL CRUD operations behind each interface."
+  default_prompt: "使用 $spring-crud-extractor 分析这个 Java Spring 代码仓和 YAML 接口清单，提取每个接口背后的 SQL CRUD 操作并生成 YAML 报告。"

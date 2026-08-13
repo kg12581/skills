@@ -1,20 +1,20 @@
 #!/usr/bin/env python3
-"""Extract SQL CRUD operations for given interfaces from Java Spring projects (offline).
+"""离线提取 Java Spring 项目中指定接口的 SQL CRUD 操作。
 
-Usage:
-    python3 extract.py <repo-path>                              # dump all CRUD ops
-    python3 extract.py <repo-path> <interfaces.yaml|json>       # trace interfaces -> CRUD ops
-    python3 extract.py <repo-path> --interfaces-json '{...}'
-    python3 extract.py <repo-path> --auto                       # trace all controller endpoints
+用法：
+    python3 extract.py <代码仓路径>                               # 全量导出所有 CRUD 操作
+    python3 extract.py <代码仓路径> <接口清单.yaml|json>          # 按接口清单追踪 CRUD 操作
+    python3 extract.py <代码仓路径> --interfaces-json '{...}'
+    python3 extract.py <代码仓路径> --auto                        # 自动发现所有 Controller 端点
 
-Options:
-    --out <file>   write the result to a file (YAML by default)
-    --format yaml|json   output format (default yaml)
-    --no-sql       omit raw SQL text from results
-    --depth <n>    max call-chain depth (default 4)
-    --auto         auto-discover every controller endpoint (no interface list needed)
+选项：
+    --out <文件>      把结果写入文件（默认 YAML）
+    --format yaml|json  输出格式（默认 yaml）
+    --no-sql          结果中隐藏原始 SQL 文本
+    --depth <n>       最大调用链深度（默认 4）
+    --auto            自动发现所有 Controller 端点（无需接口清单）
 
-Supported sources:
+支持的 SQL 来源：
     mybatis-xml, mybatis-annotation, mybatis-provider,
     jpa-repository, spring-jdbc
 """
@@ -39,7 +39,7 @@ SKIP_DIRS = {".git", ".idea", ".gradle", "target", "build", "node_modules"}
 TRACEABLE_SUFFIXES = ("Controller", "Service", "Mapper", "Repository", "Dao", "Manager", "Jdbc")
 
 
-# ---------- small helpers ----------
+# ---------- 小工具函数 ----------
 
 def localname(tag: str) -> str:
     return tag.rsplit("}", 1)[-1]
@@ -83,7 +83,7 @@ def join_java_strings(text: str) -> str:
 
 
 def first_sql_literal(content: str) -> str:
-    """First Java string-literal chain ('a' + 'b' + ...) in content."""
+    """取内容中第一段 Java 字符串字面量链（'a' + 'b' + ...）。"""
     m = re.match(
         r'\s*("(?:[^"\\]|\\.)*"\s*(?:\+\s*"(?:[^"\\]|\\.)*"\s*)*)',
         content,
@@ -94,7 +94,7 @@ def first_sql_literal(content: str) -> str:
 
 
 def extract_balanced(text: str, start: int) -> tuple[str, int]:
-    """Return (content, end_index) for the balanced parens starting at `start`."""
+    """返回从 `start` 开始的括号配对内容 (内容, 结束下标)。"""
     depth = 0
     i = start
     while i < len(text):
@@ -110,7 +110,7 @@ def extract_balanced(text: str, start: int) -> tuple[str, int]:
 
 
 def extract_block(text: str, start: int) -> tuple[str, int]:
-    """Return (content, end_index) for the balanced braces starting at `start`."""
+    """返回从 `start` 开始的花括号配对内容 (内容, 结束下标)。"""
     depth = 0
     i = start
     while i < len(text):
@@ -126,7 +126,7 @@ def extract_block(text: str, start: int) -> tuple[str, int]:
 
 
 def next_method_name(text: str, pos: int) -> str:
-    """First identifier followed by '(' after pos, skipping annotation names."""
+    """取 pos 之后第一个后跟 '(' 的标识符，跳过注解名。"""
     for m in re.finditer(r"([A-Za-z_][A-Za-z0-9_]*)\s*\(", text[pos:]):
         abs_start = pos + m.start()
         prev = text[abs_start - 1] if abs_start > 0 else ""
@@ -172,12 +172,12 @@ def is_leaf_type(name: str) -> bool:
     return name.endswith(("Mapper", "Repository", "Dao"))
 
 
-# ---------- interface list parsing (YAML or JSON) ----------
+# ---------- 接口清单解析（YAML 或 JSON） ----------
 
 def parse_yaml(text: str):
     if _yaml is None:
         raise RuntimeError(
-            "PyYAML is required to read YAML interface lists (pip install pyyaml)"
+            "读取 YAML 接口清单需要 PyYAML（pip install pyyaml）"
         )
     return _yaml.safe_load(text)
 
@@ -194,7 +194,7 @@ def load_interface_items(raw) -> list[dict]:
     if isinstance(data, list):
         return data
     if not isinstance(data, dict):
-        raise ValueError(f"interface list must be a mapping or list, got {type(data).__name__}")
+        raise ValueError(f"接口清单必须是映射或列表，当前是 {type(data).__name__}")
     items = data.get("interfaces")
     if items is None:
         items = (
@@ -215,7 +215,7 @@ def load_interface_items(raw) -> list[dict]:
     return items or []
 
 
-# ---------- Spring MVC endpoint discovery ----------
+# ---------- Spring MVC 端点发现 ----------
 
 MAPPING_VERBS = {
     "GetMapping": "GET",
@@ -242,7 +242,7 @@ def _path_from_annotation(inner: str) -> str:
 
 
 def build_endpoints(java_texts) -> dict[tuple, list[tuple[str, str]]]:
-    """Map (HTTP_METHOD, path) -> [(class, method)] from Spring MVC annotations."""
+    """从 Spring MVC 注解构建映射：HTTP方法+路径 -> [(类, 方法)]。"""
     endpoints: dict[tuple, list[tuple[str, str]]] = {}
     for _path, rel, text in java_texts:
         cls_m = re.search(r"\b(?:class|interface)\s+(\w+)", text)
@@ -340,7 +340,7 @@ def auto_discover_items(endpoints: dict) -> list[dict]:
     return items
 
 
-# ---------- project discovery ----------
+# ---------- 项目文件发现 ----------
 
 def iter_project_files(root: Path):
     for dirpath, dirnames, filenames in os.walk(root):
@@ -353,7 +353,7 @@ def iter_project_files(root: Path):
                 yield p, p.relative_to(root).as_posix()
 
 
-# ---------- CRUD extractors ----------
+# ---------- CRUD 提取器 ----------
 
 def extract_mybatis_xml(path: Path, rel: str) -> list[dict]:
     ops: list[dict] = []
@@ -630,7 +630,7 @@ def extract_jdbc(text: str, rel: str) -> list[dict]:
 
 
 def enclosing_method(text: str, pos: int) -> str:
-    """Best-effort name of the Java method enclosing byte offset `pos`."""
+    """尽力推断包含字节位置 `pos` 的 Java 方法名。"""
     head = text[:pos]
     pat = re.compile(
         r"(?m)^\s*(?:public|protected|private|static|final|synchronized|default|@Override\s+)*"
@@ -642,7 +642,7 @@ def enclosing_method(text: str, pos: int) -> str:
     return ""
 
 
-# ---------- Java class skeleton (for interface tracing) ----------
+# ---------- Java 类骨架（用于接口追踪） ----------
 
 FIELD_RE = re.compile(
     r"(?m)^\s*(?:@\w+(?:\s*\([^)]*\))?\s*)*"
@@ -757,7 +757,7 @@ def trace_interface(
 
     def visit(type_name: str, method: str, depth: int):
         if depth <= 0:
-            notes.append(f"max trace depth reached at {type_name}.{method}")
+            notes.append(f"追踪深度已达上限：{type_name}.{method}")
             return
         key = (type_name, method)
         if key in visited:
@@ -770,13 +770,13 @@ def trace_interface(
             return
         cls = classes.get(type_name)
         if cls is None:
-            notes.append(f"class not found: {type_name}")
+            notes.append(f"未找到类：{type_name}")
             return
         minfo = cls["methods"].get(method)
         if minfo is None:
             if is_leaf_type(type_name):
                 return
-            notes.append(f"method has no body or is not found: {type_name}.{method}")
+            notes.append(f"方法不存在或无方法体：{type_name}.{method}")
             return
         for var, called in find_calls(minfo["body"]):
             target = resolve_var(var, cls, minfo["params"])
@@ -830,25 +830,25 @@ def trace_interfaces(
         elif entry_method and not entry_class:
             hits = find_methods_by_name(entry_method, classes)
             if not hits:
-                notes.append(f"method not found anywhere: {entry_method}")
+                notes.append(f"所有类中都未找到方法：{entry_method}")
             else:
                 entries.extend((h, entry_method) for h in hits)
         elif item.get("method_name"):
             hits = find_methods_by_name(item["method_name"], classes)
             if not hits:
-                notes.append(f"method not found anywhere: {item['method_name']}")
+                notes.append(f"所有类中都未找到方法：{item['method_name']}")
             else:
                 entries.extend((h, item["method_name"]) for h in hits)
         elif item.get("path"):
             hits = resolve_endpoint(item.get("http_method"), item["path"], endpoints)
             if not hits:
                 verb = item.get("http_method") or ""
-                notes.append(f"no endpoint matched: {verb} {item['path']}".strip())
+                notes.append(f"没有匹配到端点：{verb} {item['path']}".strip())
             else:
                 entries.extend(hits)
         else:
             notes.append(
-                "unrecognized interface entry (use a method name, Class.method, or HTTP path)"
+                "无法识别的接口条目（请提供方法名、类.方法 或 HTTP 路径）"
             )
 
         for cls_name, method in entries:
@@ -868,7 +868,7 @@ def trace_interfaces(
                     found.extend(hits)
                     chain.append(f"{leaf_class}.{lm}")
                 else:
-                    notes.append(f"no CRUD operation matched: {leaf_class}.{lm}")
+                    notes.append(f"未匹配到 CRUD 操作：{leaf_class}.{lm}")
 
         found = dedupe_ops(found)
         if found and notes:
@@ -931,12 +931,12 @@ def summarize(ops: list[dict]) -> dict:
     return summary
 
 
-# ---------- orchestration ----------
+# ---------- 编排 ----------
 
 def analyze(repo, interface_info=None, max_depth: int = 4, auto: bool = False) -> dict:
     root = Path(repo).expanduser().resolve()
     if not root.exists():
-        raise FileNotFoundError(f"project path not found: {root}")
+        raise FileNotFoundError(f"项目路径不存在：{root}")
     files = list(iter_project_files(root))
     java_texts: list[tuple] = []
     ops: list[dict] = []
@@ -1000,7 +1000,7 @@ def dump_result(result: dict, fmt: str) -> str:
     if fmt == "json":
         return json.dumps(result, ensure_ascii=False, indent=2)
     if _yaml is None:
-        raise RuntimeError("PyYAML is required to write YAML output (pip install pyyaml)")
+        raise RuntimeError("输出 YAML 需要 PyYAML（pip install pyyaml）")
     return _yaml.safe_dump(
         result,
         allow_unicode=True,
@@ -1011,37 +1011,37 @@ def dump_result(result: dict, fmt: str) -> str:
 
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(
-        description="Offline extraction of SQL CRUD operations from Java Spring projects."
+        description="离线提取 Java Spring 项目的 SQL CRUD 操作。"
     )
-    ap.add_argument("repo", help="path to the Java Spring repository")
+    ap.add_argument("repo", help="Java Spring 代码仓路径")
     ap.add_argument(
         "interfaces",
         nargs="?",
-        help="YAML or JSON file describing the interfaces to trace",
+        help="描述待追踪接口的 YAML 或 JSON 文件",
     )
     ap.add_argument(
         "--interfaces-json",
         dest="inline",
-        help="inline JSON describing the interfaces to trace",
+        help="以内联 JSON 描述待追踪的接口",
     )
-    ap.add_argument("--out", help="write the result to this file (YAML by default)")
-    ap.add_argument("--no-sql", action="store_true", help="omit raw SQL text")
-    ap.add_argument("--depth", type=int, default=4, help="max call-chain depth (default 4)")
+    ap.add_argument("--out", help="把结果写入该文件（默认 YAML）")
+    ap.add_argument("--no-sql", action="store_true", help="结果中隐藏原始 SQL 文本")
+    ap.add_argument("--depth", type=int, default=4, help="最大调用链深度（默认 4）")
     ap.add_argument(
         "--format",
         choices=("yaml", "json"),
         default="yaml",
-        help="output format (default yaml)",
+        help="输出格式（默认 yaml）",
     )
     ap.add_argument(
         "--auto",
         action="store_true",
-        help="auto-discover all controller endpoints and trace them (no interface list needed)",
+        help="自动发现所有 Controller 端点并逐一提取（无需接口清单）",
     )
     args = ap.parse_args(argv)
 
     if args.auto and (args.interfaces or args.inline):
-        ap.error("--auto cannot be combined with an interface list")
+        ap.error("--auto 不能与接口清单同时使用")
     interface_raw = args.inline or (Path(args.interfaces).read_text(encoding="utf-8") if args.interfaces else None)
     result = analyze(args.repo, interface_raw, max_depth=args.depth, auto=args.auto)
     if args.no_sql:
