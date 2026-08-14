@@ -1,65 +1,108 @@
 # 提取模式参考
 
-当提取结果缺失 CRUD 操作、接口追踪失败，或需要新增提取模式时，先读本文件。
+本文件是提取模式的细节参考，配合 SKILL.md 的文字流程使用：手工分析时按本文件的规则执行；脚本（候选收集器）结果异常、需要覆盖新的 Spring 写法或新增提取模式时，也先读本文件。
 
 ## 目录
 
 1. [接口追踪](#接口追踪)
-2. [MyBatis XML 映射器](#mybatis-xml-映射器)
-3. [MyBatis 注解映射器](#mybatis-注解映射器)
-4. [Spring Data JPA 仓库](#spring-data-jpa-仓库)
-5. [Spring JDBC](#spring-jdbc)
-6. [表名与参数推断规则](#表名与参数推断规则)
-7. [边界情况](#边界情况)
-8. [新增提取模式](#新增提取模式)
+2. [Spring 写法全覆盖清单](#spring-写法全覆盖清单)
+3. [MyBatis XML 映射器](#mybatis-xml-映射器)
+4. [MyBatis 注解映射器](#mybatis-注解映射器)
+5. [Spring Data JPA 仓库](#spring-data-jpa-仓库)
+6. [Spring JDBC](#spring-jdbc)
+7. [表名与参数推断规则](#表名与参数推断规则)
+8. [边界情况](#边界情况)
+9. [新增提取模式](#新增提取模式)
 
 ## 接口追踪
 
-输入为 YAML（推荐）或 JSON 接口清单。每个条目可以自动追踪（`Controller → Service → Mapper/Repository → SQL`），也可以通过显式提示字段直接定位。
+输入为 JSON 接口定义（每个条目含 `api_url`、`method`、`headers`、`body`）。每个条目按 `Controller → Service → Mapper/Repository → SQL` 追踪，也可以通过提示字段直接定位入口。
 
-### YAML 接口清单
+### JSON 接口定义（api_url / 请求方法 / 请求头）
 
-每个条目是一个映射，字段越少，自动搜索越多：
-
-```yaml
-interfaces:
-  - id: create-user
-    http_method: POST
-    path: /api/users
-    controller: UserController
-    controller_method: createUser
-    service: UserService
-    service_method: createUser
-    mapper: UserMapper
-    mapper_methods: [insertUser]
-
-  - controller_method: findUser
-  - method_name: deleteUser
+```json
+{
+  "apis": [
+    {
+      "id": "create-user",
+      "api_url": "http://localhost:8080/api/users",
+      "method": "POST",
+      "headers": {"Content-Type": "application/json"},
+      "body": {"name": "张三", "age": 18}
+    }
+  ]
+}
 ```
 
-- 单独的 `controller_method` / `method_name`（不带类名）会在所有解析到的类中搜索方法；Controller 命中优先，其次 Service，再其次 Mapper/Repository。
-- HTTP 方法 + 路径（`POST /api/users`）会匹配 Spring MVC 注解（`@GetMapping`/`@PostMapping`/…，可带路径，也支持 `@RequestMapping(method = …)`），并结合类级 `@RequestMapping` 基础路径。
-- `--auto` 会根据发现的全部端点自动生成这份接口清单，因此可以完全不提供接口信息。
+- `api_url` 会去掉协议和域名只留路径，再按（方法, 路径）匹配 Spring MVC 端点。
+- `headers` 原样回显到报告的每个接口条目中。
+- `body`（请求体）原样回显，并在 setup 的 INSERT/UPDATE 记录上按参数名绑定值（`values` 字段）；JSON 字符串会自动解析成对象。
+- 匹配不到端点时，报告 `没有匹配到端点：方法 路径`；可在 JSON 里补 `controller` + `controller_method` 提示字段。
+
+### 入口提示字段
+
+匹配不到端点或想直接指定入口时，可在 JSON 条目里加提示字段：
+
+```json
+{
+  "apis": [
+    {
+      "api_url": "/api/users",
+      "method": "POST",
+      "controller": "UserController",
+      "controller_method": "createUser",
+      "service": "UserService",
+      "service_method": "createUser"
+    }
+  ]
+}
+```
+
+- `controller` + `controller_method`：直接指定入口，跳过端点匹配。
+- `service` + `service_method`：从 Service 方法开始追踪。
+- `--auto` 自动发现所有 Controller 端点，无需输入文件。
+
+### setup / teardown 生成规则
+
+- `setup` = 该接口调用链中的 INSERT / UPDATE 操作（请求前准备数据）；请求体的值会按参数名绑定（`values` 字段）。
+- `teardown` = 该接口调用链中的 DELETE 操作，加上对 setup 涉及、但缺少 DELETE 的表自动补充的 `DELETE FROM <表>`（标记 `source: generated`，作为清理模板）。
+- 接口只有 SELECT 操作时，setup/teardown 为空，并在 `trace.notes` 说明。
 
 ### 解析规则
 
-- 入口优先级：`controller + controller_method`，其次 `service + service_method`，再其次直接指定 `mapper`/`repository`。
-- 对每个 Java 文件建立轻量符号表：类名、字段类型（`private final UserService userService;`）、构造方法/方法参数类型、方法体。
-- 当 `var.method(...)` 中 `var` 能解析为已知类型，且类型名以 `Controller`、`Service`、`Mapper`、`Repository`、`Dao`、`Manager` 或 `Jdbc` 结尾时，会继续追踪该调用；`this.method(...)` 在本类内继续追踪。
-- CRUD 操作匹配条件：`op.owner == 类型名` 且 `op.method == 被调用方法名`：
-  - MyBatis XML：owner = mapper `namespace` 的最后一段。
-  - MyBatis 注解/Provider：owner = 文件名去掉扩展名（如 `UserMapper.java` → `UserMapper`）。
-  - JPA 仓库：owner = 仓库接口名。
-  - Spring JDBC：owner = 所在类文件名去扩展名，method = `jdbcTemplate` 调用所在的方法。
+- 脚本用“方法名粗链”：某类方法体里调用 `x.y(...)`，只要 `y` 在另一个可追踪类（Controller/Service/Mapper/Repository/Dao/Manager/Jdbc）里声明，就连过去；不解析字段类型。
+- SQL 候选来源：`mybatis-xml`（XML mapper）和 `java-sql`（Java 字符串字面量里的 SQL）。
+- 框架生成的 SQL（JPA 派生、MyBatis-Plus、Provider、动态 SQL）脚本收集不到，按文字流程人工补全。
 - 追踪深度默认 4；链路较长时用 `--depth` 提高。
+
+### Spring 写法全覆盖清单
+
+对照项目实际写法，逐条确认提取方式：
+
+| 写法 | 示例 | 提取方式 |
+| --- | --- | --- |
+| MyBatis XML | `<select id="findById">…</select>` | 直接取 SQL；`<if>/<where>/<foreach>` 展开 |
+| MyBatis 注解 | `@Insert("INSERT …")` | 直接取字符串（含 `"a" + "b"` 拼接） |
+| MyBatis Provider | `@SelectProvider(type=…, method=…)` | `sql: null`，去 Provider 方法找 SQL |
+| MyBatis-Plus | `IService.save` / `BaseMapper.selectList(wrapper)` | 框架生成：`sql: null`，注明实体/表/操作 |
+| JPA 派生方法 | `findByStatus` / `deleteByName` | 按前缀定操作，表=实体 `@Table` 或转下划线，`sql: null` |
+| JPA `@Query` | `@Query("update User u …")` | 直接取 JPQL/SQL |
+| JPA `Specification` / `Example` | `repository.findAll(spec)` | 框架生成：`sql: null`，注明实体/表 |
+| JdbcTemplate | `jdbcTemplate.query("SELECT …", …)` | 取内联 SQL；变量 SQL 从赋值处拼片段并标注 |
+| SqlSessionTemplate | `sqlSession.selectList("demo.UserMapper.find", …)` | 按 statement id 找对应 XML/注解 SQL |
+| Hibernate Session | `session.createQuery("from User …")` | 直接取 JPQL/SQL |
+| Spring Data JDBC | `@Query` 仓库方法 | 直接取 SQL |
+| 动态 SQL | `<script>`、`StringBuilder`、`QueryWrapper` | 给骨架 + 说明，不伪造完整语句 |
+
+一个接口里出现多种写法时（如 MyBatis + JPA + JdbcTemplate 混用），每种都提取，按调用顺序放进 setup/teardown。
 
 ### 排查方法
 
-- `未找到类：X`：类文件可能不存在，或不同包下有同名简单类；改用全限定名，或检查类名拼写。
-- `方法不存在或无方法体：X.m`：方法名不对，或者它是只匹配 CRUD 操作的仓库/接口方法（检查记录里的 `owner`/`method` 拼写）。
-- `未匹配到 CRUD 操作：X.m`：方法存在，但背后没有 mapper/repository/JdbcTemplate SQL，或 SQL 是动态拼接的。
+- `没有匹配到端点：方法 路径`：检查 `api_url` 拼写和 `method`，或改用 `controller` + `controller_method` 提示字段。
+- `只收集到 SELECT 候选`：该接口的写操作来自框架生成（JPA 派生、MyBatis-Plus 等），按文字流程补全。
+- 未找到类/方法（手工追踪时）：类文件可能不存在或不同包下有同名简单类；用全限定名或检查拼写。
 - `没有匹配到端点：POST /api/xxx`：Spring MVC 注解解析不到该路径/方法；检查 Controller 映射，或改用 `类.方法` 写法。
-- 静态解析不出调用链时，补充 `mapper` + `mapper_methods` 或 `repository` + `repository_methods` 提示字段。
+- 静态解析不出调用链时，补充 `controller`/`service` 提示字段，或按文字流程人工读代码补全。
 
 ## MyBatis XML 映射器
 
@@ -161,6 +204,21 @@ public int updatePassword(Long id, String password) {
 - 多语句块（如一个 `<select>` 输出多条语句）：只分类第一个操作/表。
 - 不同包下同名简单类：追踪时以最后解析到的文件为准；可使用全限定名或 `mapper`/`repository` 提示字段。
 - 重复记录（source/file/owner/method/SQL 相同）会自动去重。
+
+## 灵活场景处理（人工判断为主）
+
+脚本是正则规则，遇到以下场景可能解析失败或解析偏。遇到时按文字流程人工读代码补全，不要依赖脚本结果：
+
+| 场景 | 处理方式 |
+| --- | --- |
+| 继承方法（`ServiceImpl`、`BaseMapper`、父接口） | 去父类/父接口找方法体和 SQL；框架方法标 `sql: null` 并注明实体/表 |
+| MyBatis-Plus `QueryWrapper` / `LambdaQueryWrapper` | SQL 由框架生成；记录实体/表，标“框架动态生成” |
+| JPA `Specification` / `Example` / `@Query` 拼接 | 同上；`@Query` 能拿到的部分照写，其余标注动态 |
+| 方法重载 / 同名类 | 用全限定名和参数签名区分；不确定时并列列出候选 |
+| 事务方法内多次写库 | 按调用顺序收集全部 INSERT/UPDATE/DELETE，不要只取第一个 |
+| 静态工具类、反射、AOP | 无法静态确认是否写库时，标注“无法静态确认”，不硬写 SQL |
+| 多数据源 | 报告表名并提示确认数据源；不要假设默认数据源 |
+| `JdbcTemplate` 变量 SQL | 从变量赋值处拼出片段，标注“动态拼接”，不给伪完整 SQL |
 
 ## 新增提取模式
 
